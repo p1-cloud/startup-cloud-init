@@ -1,0 +1,75 @@
+#cloud-config
+users:
+  - name: ubuntu
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    shell: /bin/bash
+    lock_passwd: false
+  - name: admin
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+  - name: dev
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+  - name: ops
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+
+package_update: true
+package_upgrade: true
+packages:
+  - nginx
+  - ufw
+  - curl
+  - certbot
+  - python3-certbot-nginx
+
+runcmd:
+  - |
+    echo "=== Génération des clés SSH pour chaque utilisateur ==="
+    for user in admin dev ops; do
+      su - $user -c "
+        mkdir -p ~/.ssh
+        chmod 700 ~/.ssh
+        ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N '' <<< y
+        cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+        chmod 600 ~/.ssh/authorized_keys
+      "
+      chown -R $user:$user /home/$user/.ssh
+    done
+
+  - echo "=== Configuration du pare-feu UFW ==="
+  - ufw allow OpenSSH
+  - ufw allow 'Nginx Full'
+  - ufw --force enable
+
+  - echo "=== Activation des logs SSH ==="
+  - touch /var/log/auth.log
+  - chmod 600 /var/log/auth.log
+  - systemctl restart ssh
+
+  - echo "=== Déploiement du site HTML de base ==="
+  - echo "<!DOCTYPE html><html><head><title>Startup</title></head><body><h1>Bienvenue sur notre site startup !</h1></body></html>" > /var/www/html/index.html
+
+  - echo "=== Configuration NGINX pour le domaine DuckDNS ==="
+  - sed -i "s/server_name _;/server_name projetec2.duckdns.org;/" /etc/nginx/sites-available/default
+  - systemctl reload nginx
+
+  - echo "=== Configuration DuckDNS pour mise à jour IP ==="
+  - mkdir -p /opt/duckdns
+  - echo 'echo url="https://www.duckdns.org/update?domains=projetec2&token=4534b3a4-eda9-4ce7-8899-49761fdf1b61&ip=" | curl -k -o /var/log/duckdns.log -K -' > /opt/duckdns/duck.sh
+  - chmod 700 /opt/duckdns/duck.sh
+  - echo '*/5 * * * * root /opt/duckdns/duck.sh >/dev/null 2>&1' > /etc/cron.d/duckdns
+  - /opt/duckdns/duck.sh
+
+  - echo "=== Attente de la propagation DNS avant certificat SSL ==="
+  - sleep 60
+
+  - echo "=== Obtention du certificat SSL avec Certbot ==="
+  - certbot --nginx -d projetec2.duckdns.org --non-interactive --agree-tos -m oumoupinyd@gmail.com --redirect || echo "Certbot a échoué"
+
+  - systemctl restart cron
+
+
